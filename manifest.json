@@ -2,7 +2,7 @@
   "name": "Métronome Pro",
   "short_name": "Métronome",
   "description": "Métronome professionnel avec gestion de playlists",
-  "start_url": "/",
+  "start_url": "https://jelcoursdrms2-art.github.io/metronome-pro/",
   "display": "standalone",
   "background_color": "#000000",
   "theme_color": "#000000",
