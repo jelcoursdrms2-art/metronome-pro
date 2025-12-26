@@ -1,0 +1,661 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Play, Pause, ChevronLeft, ChevronRight, Settings, Edit, List, Plus, Trash2, Save, Upload, Menu } from 'lucide-react';
+
+const MetronomePWA = () => {
+  // États principaux
+  const [currentScreen, setCurrentScreen] = useState('metronome');
+  const [playlists, setPlaylists] = useState([]);
+  const [currentPlaylistId, setCurrentPlaylistId] = useState(null);
+  const [currentSongIndex, setCurrentSongIndex] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [autoMode, setAutoMode] = useState(false);
+  const [tempo, setTempo] = useState(120);
+  const [timeSignature, setTimeSignature] = useState(4);
+  const [currentBeat, setCurrentBeat] = useState(0);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalConfig, setModalConfig] = useState({ type: '', title: '', message: '', value: '', onConfirm: null });
+
+  // Réglages
+  const [darkMode, setDarkMode] = useState(true);
+  const [autoPulses, setAutoPulses] = useState(8);
+  const [textSize, setTextSize] = useState(100);
+
+  // Refs
+  const intervalRef = useRef(null);
+  const wakeLockRef = useRef(null);
+  const beatCountRef = useRef(0);
+
+  // Playlist et morceau actuels
+  const currentPlaylist = playlists.find(p => p.id === currentPlaylistId);
+  const currentSong = currentPlaylist?.songs[currentSongIndex];
+
+  // Initialisation
+  useEffect(() => {
+    loadData();
+    requestWakeLock();
+    return () => releaseWakeLock();
+  }, []);
+
+  // Gestion du wake lock
+  const requestWakeLock = async () => {
+    try {
+      if ('wakeLock' in navigator) {
+        wakeLockRef.current = await navigator.wakeLock.request('screen');
+      }
+    } catch (err) {
+      console.log('Wake Lock error:', err);
+    }
+  };
+
+  const releaseWakeLock = () => {
+    if (wakeLockRef.current) {
+      wakeLockRef.current.release();
+      wakeLockRef.current = null;
+    }
+  };
+
+  // Chargement des données
+  const loadData = () => {
+    const saved = localStorage.getItem('metronome-data');
+    if (saved) {
+      const data = JSON.parse(saved);
+      setPlaylists(data.playlists || []);
+      setCurrentPlaylistId(data.currentPlaylistId);
+      setCurrentSongIndex(data.currentSongIndex || 0);
+      setAutoPulses(data.autoPulses || 8);
+      setTextSize(data.textSize || 100);
+    }
+  };
+
+  // Sauvegarde des données
+  const saveData = () => {
+    const data = {
+      playlists,
+      currentPlaylistId,
+      currentSongIndex,
+      autoPulses,
+      textSize
+    };
+    localStorage.setItem('metronome-data', JSON.stringify(data));
+  };
+
+  useEffect(() => {
+    saveData();
+  }, [playlists, currentPlaylistId, currentSongIndex, autoPulses, textSize]);
+
+  // Mise à jour tempo et time signature depuis le morceau actuel
+  useEffect(() => {
+    if (currentSong) {
+      setTempo(currentSong.tempo);
+      setTimeSignature(currentSong.time);
+    }
+  }, [currentSong]);
+
+  // Métronome
+  useEffect(() => {
+    if (isPlaying) {
+      const interval = 60000 / tempo;
+      intervalRef.current = setInterval(() => {
+        setCurrentBeat(prev => {
+          const next = (prev + 1) % timeSignature;
+          beatCountRef.current += 1;
+
+          // Mode auto
+          if (autoMode && beatCountRef.current >= autoPulses) {
+            setIsPlaying(false);
+            beatCountRef.current = 0;
+            setTimeout(() => nextSong(), 100);
+          }
+
+          return next;
+        });
+      }, interval);
+    } else {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
+      setCurrentBeat(0);
+      beatCountRef.current = 0;
+    }
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [isPlaying, tempo, timeSignature, autoMode, autoPulses]);
+
+  // Navigation morceaux
+  const nextSong = () => {
+    if (currentPlaylist && currentPlaylist.songs.length > 0) {
+      setCurrentSongIndex(prev => (prev + 1) % currentPlaylist.songs.length);
+    }
+  };
+
+  const prevSong = () => {
+    if (currentPlaylist && currentPlaylist.songs.length > 0) {
+      setCurrentSongIndex(prev => prev === 0 ? currentPlaylist.songs.length - 1 : prev - 1);
+    }
+  };
+
+  // Gestion playlists
+  const addPlaylist = (e) => {
+    e?.preventDefault();
+    e?.stopPropagation();
+
+    setModalConfig({
+      type: 'input',
+      title: 'Nouvelle playlist',
+      message: 'Nom de la playlist :',
+      value: '',
+      onConfirm: (name) => {
+        if (name && name.trim()) {
+          const newPlaylist = {
+            id: Date.now(),
+            name: name.trim(),
+            songs: []
+          };
+          const updatedPlaylists = [...playlists, newPlaylist];
+          setPlaylists(updatedPlaylists);
+          setCurrentPlaylistId(newPlaylist.id);
+          setCurrentSongIndex(0);
+        }
+        setModalOpen(false);
+      }
+    });
+    setModalOpen(true);
+  };
+
+  const deletePlaylist = (id) => {
+    setModalConfig({
+      type: 'confirm',
+      title: 'Supprimer',
+      message: 'Supprimer cette playlist ?',
+      onConfirm: (confirmed) => {
+        if (confirmed) {
+          setPlaylists(playlists.filter(p => p.id !== id));
+          if (currentPlaylistId === id) {
+            setCurrentPlaylistId(null);
+            setCurrentSongIndex(0);
+          }
+        }
+        setModalOpen(false);
+      }
+    });
+    setModalOpen(true);
+  };
+
+  const renamePlaylist = (id) => {
+    const playlist = playlists.find(p => p.id === id);
+    setModalConfig({
+      type: 'input',
+      title: 'Renommer',
+      message: 'Nouveau nom :',
+      value: playlist.name,
+      onConfirm: (newName) => {
+        if (newName && newName.trim()) {
+          setPlaylists(playlists.map(p => p.id === id ? {...p, name: newName.trim()} : p));
+        }
+        setModalOpen(false);
+      }
+    });
+    setModalOpen(true);
+  };
+
+  // Export/Import
+  const exportData = () => {
+    const data = JSON.stringify({ playlists, autoPulses, textSize }, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'metronome-backup.json';
+    a.click();
+  };
+
+  const importData = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = JSON.parse(e.target.result);
+          setPlaylists(data.playlists || []);
+          setAutoPulses(data.autoPulses || 8);
+          setTextSize(data.textSize || 100);
+        } catch (err) {
+          alert('Erreur lors de l\'import');
+        }
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  // ÉCRAN 1 - MÉTRONOME
+  const MetronomeScreen = () => (
+    <div className="flex flex-col h-screen bg-black text-white" style={{fontSize: `${textSize}%`}}>
+      {/* Bandeau supérieur */}
+      <div className="flex items-center justify-between p-4 border-b border-gray-800">
+        <div className="flex-1 text-center text-xl font-bold">
+          {currentPlaylist?.name || 'Pas de playlist'}
+        </div>
+        <div className="flex gap-2">
+          <button onClick={() => setSettingsOpen(true)} className="p-2 hover:bg-gray-800 rounded">
+            <Settings size={24} />
+          </button>
+          <button onClick={() => setCurrentScreen('playlists')} className="p-2 hover:bg-gray-800 rounded">
+            <List size={24} />
+          </button>
+          <button onClick={() => currentPlaylistId && setCurrentScreen('editor')} className="p-2 hover:bg-gray-800 rounded disabled:opacity-50">
+            <Edit size={24} />
+          </button>
+        </div>
+      </div>
+
+      {/* Indicateurs de temps */}
+      <div className="flex items-center justify-center gap-2 p-4 bg-gray-900" style={{height: '20%'}}>
+        {[...Array(timeSignature)].map((_, i) => (
+          <div
+            key={i}
+            className={`flex-1 rounded-lg transition-all duration-100 ${
+              i === currentBeat && isPlaying ? 'bg-orange-500' : 'bg-gray-700'
+            }`}
+            style={{maxWidth: '12.5%', height: '100%'}}
+          />
+        ))}
+      </div>
+
+      {/* Titre du morceau */}
+      <div className="text-center p-4 text-4xl font-semibold border-b border-gray-800">
+        {currentSong?.title || 'Aucun morceau'}
+      </div>
+
+      {/* Réglage tempo */}
+      <div className="flex items-center justify-center gap-4 p-6">
+        <button
+          onClick={() => setTempo(Math.max(40, tempo - 1))}
+          className="w-12 h-12 bg-gray-700 rounded-lg text-2xl font-bold hover:bg-gray-600"
+        >
+          -
+        </button>
+        <div className="text-6xl font-bold w-32 text-center">
+          {tempo}
+        </div>
+        <button
+          onClick={() => setTempo(Math.min(300, tempo + 1))}
+          className="w-12 h-12 bg-gray-700 rounded-lg text-2xl font-bold hover:bg-gray-600"
+        >
+          +
+        </button>
+      </div>
+
+      {/* Bouton Play/Pause */}
+      <div className="flex-1 flex items-center justify-center">
+        <button
+          onClick={() => setIsPlaying(!isPlaying)}
+          className="bg-green-800 hover:bg-green-700 rounded-lg flex items-center justify-center"
+          style={{width: '50%', height: '44.44%'}}
+        >
+          {isPlaying ? <Pause size={80} /> : <Play size={80} />}
+        </button>
+      </div>
+
+      {/* Contrôles bas */}
+      <div className="flex items-center justify-center gap-4 p-4" style={{height: '20%'}}>
+        <button
+          onClick={prevSong}
+          className="bg-gray-700 hover:bg-gray-600 rounded-lg flex items-center justify-center"
+          style={{width: '20%', aspectRatio: '1'}}
+        >
+          <ChevronLeft size={48} />
+        </button>
+
+        <button
+          onClick={() => setAutoMode(!autoMode)}
+          className={`${autoMode ? 'bg-green-600' : 'bg-green-800'} hover:bg-green-700 rounded-lg font-bold text-xl flex items-center justify-center`}
+          style={{width: '20%', aspectRatio: '1'}}
+        >
+          AUTO
+        </button>
+
+        <button
+          onClick={nextSong}
+          className="bg-gray-700 hover:bg-gray-600 rounded-lg flex items-center justify-center"
+          style={{width: '20%', aspectRatio: '1'}}
+        >
+          <ChevronRight size={48} />
+        </button>
+      </div>
+    </div>
+  );
+
+  // ÉCRAN 2 - PLAYLISTS
+  const PlaylistsScreen = () => (
+    <div className="flex flex-col h-screen bg-black text-white" style={{fontSize: `${textSize}%`}}>
+      <div className="flex items-center justify-between p-4 border-b border-gray-800">
+        <button onClick={() => setCurrentScreen('metronome')} className="p-2 hover:bg-gray-700 rounded">
+          <ChevronLeft size={24} />
+        </button>
+        <div className="flex-1 text-center text-xl font-bold">
+          {currentPlaylist?.name || 'Playlists'}
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              addPlaylist(e);
+            }}
+            className="p-2 bg-green-700 rounded hover:bg-green-600 active:bg-green-500"
+            type="button"
+          >
+            <Plus size={24} />
+          </button>
+          <button
+            onClick={() => currentPlaylistId && setCurrentScreen('editor')}
+            className="p-2 bg-green-700 rounded hover:bg-green-600 disabled:opacity-50"
+            disabled={!currentPlaylistId}
+            type="button"
+          >
+            <Edit size={24} />
+          </button>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4">
+        {playlists.length === 0 && (
+          <div className="text-center text-gray-500 mt-8">
+            <p className="mb-4">Aucune playlist</p>
+            <button
+              onClick={addPlaylist}
+              className="bg-green-700 hover:bg-green-600 px-6 py-3 rounded-lg"
+            >
+              Créer ma première playlist
+            </button>
+          </div>
+        )}
+
+        {playlists.map(playlist => (
+          <div
+            key={playlist.id}
+            onClick={() => {
+              setCurrentPlaylistId(playlist.id);
+              setCurrentSongIndex(0);
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setModalConfig({
+                type: 'choice',
+                title: playlist.name,
+                message: 'Choisissez une action :',
+                onConfirm: (action) => {
+                  if (action === 'delete') {
+                    deletePlaylist(playlist.id);
+                  } else if (action === 'rename') {
+                    renamePlaylist(playlist.id);
+                  }
+                  setModalOpen(false);
+                }
+              });
+              setModalOpen(true);
+            }}
+            className={`p-4 mb-2 rounded-lg cursor-pointer ${
+              currentPlaylistId === playlist.id ? 'bg-green-800' : 'bg-gray-800 hover:bg-gray-700'
+            }`}
+          >
+            <div className="font-semibold">{playlist.name}</div>
+            <div className="text-sm text-gray-400">{playlist.songs.length} morceaux</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  // ÉCRAN 3 - ÉDITEUR
+  const EditorScreen = () => {
+    const [editingSongs, setEditingSongs] = useState(currentPlaylist?.songs || []);
+
+    useEffect(() => {
+      setEditingSongs(currentPlaylist?.songs || []);
+    }, [currentPlaylist]);
+
+    const saveSongs = () => {
+      if (currentPlaylistId) {
+        setPlaylists(playlists.map(p =>
+          p.id === currentPlaylistId ? {...p, songs: editingSongs} : p
+        ));
+      }
+      setCurrentScreen('playlists');
+    };
+
+    const addSong = () => {
+      setEditingSongs([...editingSongs, { id: Date.now(), title: '', tempo: 120, time: 4 }]);
+    };
+
+    const updateSong = (id, field, value) => {
+      setEditingSongs(editingSongs.map(s =>
+        s.id === id ? {...s, [field]: field === 'title' ? value : parseInt(value) || 0} : s
+      ));
+    };
+
+    const deleteSong = (id) => {
+      setModalConfig({
+        type: 'confirm',
+        title: 'Supprimer',
+        message: 'Supprimer ce morceau ?',
+        onConfirm: (confirmed) => {
+          if (confirmed) {
+            setEditingSongs(editingSongs.filter(s => s.id !== id));
+          }
+          setModalOpen(false);
+        }
+      });
+      setModalOpen(true);
+    };
+
+    return (
+      <div className="flex flex-col h-screen bg-black text-white" style={{fontSize: `${textSize}%`}}>
+        <div className="flex items-center justify-between p-4 border-b border-gray-800">
+          <button onClick={saveSongs} className="p-2">
+            <ChevronLeft size={24} />
+          </button>
+          <div className="flex-1 text-center text-xl font-bold">
+            {currentPlaylist?.name || 'Éditeur'}
+          </div>
+          <button onClick={addSong} className="p-2 bg-green-700 rounded hover:bg-green-600">
+            <Plus size={24} />
+          </button>
+        </div>
+
+        <div className="flex p-2 bg-gray-900 border-b border-gray-800 font-bold">
+          <div className="w-3/5 px-2">Titre</div>
+          <div className="w-1/5 px-2 text-center">Tempo</div>
+          <div className="w-1/5 px-2 text-center">Time</div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
+          {editingSongs.map((song, index) => (
+            <div
+              key={song.id}
+              className="flex items-center p-2 border-b border-gray-800 hover:bg-gray-900"
+              onContextMenu={(e) => {
+                e.preventDefault();
+                deleteSong(song.id);
+              }}
+            >
+              <input
+                type="text"
+                value={song.title}
+                onChange={(e) => updateSong(song.id, 'title', e.target.value)}
+                className="w-3/5 px-2 py-2 bg-gray-800 rounded mr-2"
+                placeholder="Titre du morceau"
+              />
+              <input
+                type="number"
+                value={song.tempo}
+                onChange={(e) => updateSong(song.id, 'tempo', e.target.value)}
+                className="w-1/5 px-2 py-2 bg-gray-800 rounded mr-2 text-center"
+                min="40"
+                max="300"
+              />
+              <input
+                type="number"
+                value={song.time}
+                onChange={(e) => updateSong(song.id, 'time', e.target.value)}
+                className="w-1/5 px-2 py-2 bg-gray-800 rounded text-center"
+                min="1"
+                max="16"
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  // Modale personnalisée
+  const CustomModal = () => {
+    const [inputValue, setInputValue] = useState(modalConfig.value || '');
+
+    if (!modalOpen) return null;
+
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center z-50" onClick={() => setModalOpen(false)}>
+        <div className="bg-gray-900 rounded-lg p-6 max-w-md w-full mx-4 text-white" onClick={(e) => e.stopPropagation()}>
+          <h2 className="text-2xl font-bold mb-4 text-white">{modalConfig.title}</h2>
+          <p className="mb-4 text-white">{modalConfig.message}</p>
+
+          {modalConfig.type === 'input' && (
+            <input
+              type="text"
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              className="w-full p-3 bg-gray-800 text-white rounded-lg mb-4"
+              placeholder="Entrez le nom..."
+              autoFocus
+              onKeyPress={(e) => {
+                if (e.key === 'Enter') {
+                  modalConfig.onConfirm(inputValue);
+                }
+              }}
+            />
+          )}
+
+          {modalConfig.type === 'choice' && (
+            <div className="space-y-2 mb-4">
+              <button
+                onClick={() => modalConfig.onConfirm('rename')}
+                className="w-full bg-blue-700 hover:bg-blue-600 p-3 rounded-lg text-white"
+              >
+                Renommer
+              </button>
+              <button
+                onClick={() => modalConfig.onConfirm('delete')}
+                className="w-full bg-red-700 hover:bg-red-600 p-3 rounded-lg text-white"
+              >
+                Supprimer
+              </button>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            {modalConfig.type !== 'choice' && (
+              <>
+                <button
+                  onClick={() => setModalOpen(false)}
+                  className="flex-1 bg-gray-700 hover:bg-gray-600 p-3 rounded-lg text-white"
+                >
+                  Annuler
+                </button>
+                <button
+                  onClick={() => modalConfig.onConfirm(modalConfig.type === 'input' ? inputValue : true)}
+                  className="flex-1 bg-green-700 hover:bg-green-600 p-3 rounded-lg text-white"
+                >
+                  OK
+                </button>
+              </>
+            )}
+            {modalConfig.type === 'choice' && (
+              <button
+                onClick={() => setModalOpen(false)}
+                className="w-full bg-gray-700 hover:bg-gray-600 p-3 rounded-lg text-white"
+              >
+                Annuler
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Menu Réglages
+  const SettingsMenu = () => (
+    <div className="fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center z-50" onClick={() => setSettingsOpen(false)}>
+      <div className="bg-gray-900 rounded-lg p-6 max-w-md w-full mx-4" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-2xl font-bold mb-6">Réglages</h2>
+
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <span>Mode sombre</span>
+            <button
+              onClick={() => setDarkMode(!darkMode)}
+              className={`w-12 h-6 rounded-full ${darkMode ? 'bg-green-600' : 'bg-gray-600'}`}
+            >
+              <div className={`w-5 h-5 bg-white rounded-full transition-transform ${darkMode ? 'translate-x-6' : 'translate-x-1'}`} />
+            </button>
+          </div>
+
+          <div>
+            <label className="block mb-2">Pulsations mode AUTO: {autoPulses}</label>
+            <input
+              type="range"
+              min="6"
+              max="16"
+              value={autoPulses}
+              onChange={(e) => setAutoPulses(parseInt(e.target.value))}
+              className="w-full"
+            />
+          </div>
+
+          <div>
+            <label className="block mb-2">Taille texte: {textSize - 100}%</label>
+            <input
+              type="range"
+              min="80"
+              max="120"
+              step="5"
+              value={textSize}
+              onChange={(e) => setTextSize(parseInt(e.target.value))}
+              className="w-full"
+            />
+          </div>
+
+          <button onClick={exportData} className="w-full bg-green-700 hover:bg-green-600 p-3 rounded-lg">
+            Exporter les données
+          </button>
+
+          <label className="w-full bg-green-700 hover:bg-green-600 p-3 rounded-lg block text-center cursor-pointer">
+            Importer les données
+            <input type="file" accept=".json" onChange={importData} className="hidden" />
+          </label>
+        </div>
+
+        <button onClick={() => setSettingsOpen(false)} className="w-full mt-6 bg-gray-700 hover:bg-gray-600 p-3 rounded-lg">
+          Fermer
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      {currentScreen === 'metronome' && <MetronomeScreen />}
+      {currentScreen === 'playlists' && <PlaylistsScreen />}
+      {currentScreen === 'editor' && <EditorScreen />}
+      {settingsOpen && <SettingsMenu />}
+      <CustomModal />
+    </>
+  );
+};
+
+export default MetronomePWA;
